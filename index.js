@@ -5,6 +5,25 @@ const app = express();
 const port = process.env.PORT || 3000;
 const nodemailer = require("nodemailer");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { Server } = require("socket.io");
+const fetch = require("node-fetch");
+
+// Helper function to get lat/lng from address
+async function getCoordinates(address) {
+  const res = await fetch(
+    `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+      address
+    )}`
+  );
+  const data = await res.json();
+  if (data && data.length > 0) {
+    return {
+      lat: parseFloat(data[0].lat),
+      lng: parseFloat(data[0].lon),
+    };
+  }
+  return null;
+}
 
 // Middleware
 app.use(cors());
@@ -37,6 +56,33 @@ async function run() {
 
     // ----------------------------------------
 
+    // Use app.listen and get the server
+    const server = app.listen(port, () => {
+      console.log(`Server is running on port ${port}`);
+    });
+
+    // Attach socket.io to the server
+    const io = new Server(server, {
+      cors: {
+        origin: "*", // adjust if needed
+      },
+    });
+
+    // Socket.io logic
+    io.on("connection", (socket) => {
+      console.log("A user connected:", socket.id);
+
+      socket.on("disconnect", () => {
+        console.log("User disconnected:", socket.id);
+      });
+    });
+
+    // Example: emit to frontend
+    app.post("/update-status", (req, res) => {
+      io.emit("status-updated"); // 🔄 Notify frontend
+      res.send({ message: "Status updated and clients notified" });
+    });
+
     // Users Api------------------------------------
 
     // POST route to add a new user
@@ -59,11 +105,28 @@ async function run() {
     // Post: Book Parcel
     app.post("/parcels", async (req, res) => {
       try {
+        const { pickupAddress, deliveryAddress } = req.body;
+
+        const pickupCoords = await getCoordinates(pickupAddress + ", Dhaka");
+
+        const deliveryCoords = await getCoordinates(
+          deliveryAddress + ", Dhaka"
+        );
+
+        if (!pickupCoords || !deliveryCoords) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Invalid addresses" });
+        }
+
         const parcel = {
           ...req.body,
-          status: "pending",
+          status: "Pending",
           createdAt: new Date(),
           _id: new ObjectId(),
+
+          pickup: pickupCoords,
+          delivery: deliveryCoords,
         };
 
         const result = await parcelsCollection.insertOne(parcel);
@@ -80,7 +143,7 @@ async function run() {
         const mailOptions = {
           from: `"GoQuick" <${process.env.EMAIL_USER}>`,
           to: parcel.email,
-          subject: "🎉 Parcel Booking Confirmation",
+          subject: "Parcel Booking Confirmation",
           html: `
         <h2>Thank you, ${parcel.name}!</h2>
         <p>Your parcel has been booked successfully with the following details:</p>
@@ -105,6 +168,28 @@ async function run() {
       }
     });
 
+    // Get: Get bookings by email
+    app.get("/parcels", async (req, res) => {
+      const email = req.query.email;
+      const query = { email };
+      const result = await parcelsCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // Patch: Update booking status
+    app.patch("/parcels/:id", async (req, res) => {
+      const id = req.params.id;
+      const newStatus = req.body.status;
+      const result = await parcelsCollection.updateOne(
+        { _id: new MongoClient.ObjectId(id) },
+        { $set: { status: newStatus } }
+      );
+      if (result.modifiedCount > 0) {
+        emitStatusUpdate(); // emit to all clients
+      }
+      res.send(result);
+    });
+
     // ---------------------------------------
 
     // Example route to test DB connection
@@ -113,9 +198,9 @@ async function run() {
     });
 
     // Start the server after DB connection
-    app.listen(port, () => {
-      console.log(`Server is running at http://localhost:${port}`);
-    });
+    // app.listen(port, () => {
+    //   console.log(`Server is running at http://localhost:${port}`);
+    // });
   } catch (error) {
     console.error("Failed to connect to MongoDB", error);
   }
