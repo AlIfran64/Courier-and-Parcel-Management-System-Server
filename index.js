@@ -54,6 +54,11 @@ async function run() {
     // Parcels Collection
     const parcelsCollection = client.db("goQuickDb").collection("parcels");
 
+    // Delivery agents collection
+    const deliveryAgentsCollection = client
+      .db("goQuickDb")
+      .collection("deliveryAgents");
+
     // ----------------------------------------
 
     // Use app.listen and get the server
@@ -96,6 +101,84 @@ async function run() {
       }
       const result = await usersCollection.insertOne(user);
       res.send(result);
+    });
+
+    // PATCH user role and add availability
+    app.patch("/users/role/:email", async (req, res) => {
+      const email = req.params.email;
+      const updateData = req.body;
+
+      const result = await usersCollection.updateOne(
+        { email: email },
+        { $set: updateData }
+      );
+
+      res.send(result);
+    });
+
+    // GET all users
+    app.get("/users", async (req, res) => {
+      try {
+        const users = await usersCollection.find().toArray();
+        res.send(users);
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).send({ message: "Error fetching users" });
+      }
+    });
+
+    // --------------------------------------
+
+    // Delivery agents api-------------------
+
+    // POST: Apply as a delivery agent
+    app.post("/deliveryAgents", async (req, res) => {
+      try {
+        const agentData = req.body;
+
+        // Check if user already applied
+        const exists = await deliveryAgentsCollection.findOne({
+          email: agentData.email,
+        });
+        if (exists) {
+          return res.status(400).json({ message: "You have already applied." });
+        }
+
+        // Save new agent application
+        const result = await deliveryAgentsCollection.insertOne({
+          ...agentData,
+          appliedAt: new Date(),
+        });
+
+        res.status(201).json({
+          message: "Application submitted successfully.",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Error applying delivery agent:", error);
+        res.status(500).json({ message: "Internal Server Error" });
+      }
+    });
+
+    // DELETE delivery agent request
+    app.delete("/deliveryAgents/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await deliveryAgentsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // GET pending delivery agent requests
+    app.get("/deliveryAgents", async (req, res) => {
+      try {
+        const deliveryAgents = await deliveryAgentsCollection
+          .find({})
+          .toArray();
+        res.send(deliveryAgents);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching delivery agents" });
+      }
     });
 
     // --------------------------------------
@@ -171,22 +254,25 @@ async function run() {
     // Get: Get bookings by email
     app.get("/parcels", async (req, res) => {
       const email = req.query.email;
-      const query = { email };
+      const query = email ? { email } : {};
       const result = await parcelsCollection.find(query).toArray();
       res.send(result);
     });
 
-    // Patch: Update booking status
+    // Patch: Update booking status + assignTo + deliveryAgent etc.
     app.patch("/parcels/:id", async (req, res) => {
       const id = req.params.id;
-      const newStatus = req.body.status;
+      const updateData = req.body;
+
       const result = await parcelsCollection.updateOne(
-        { _id: new MongoClient.ObjectId(id) },
-        { $set: { status: newStatus } }
+        { _id: new ObjectId(id) },
+        { $set: updateData }
       );
+
       if (result.modifiedCount > 0) {
-        emitStatusUpdate(); // emit to all clients
+        io.emit("status-updated");
       }
+
       res.send(result);
     });
 
