@@ -6,7 +6,7 @@ Follow the steps below to set up and run the server-side of the project locally.
 ## 1. Clone the Repository
 
 ```
-git clone https://github.com/your-repo-url.git
+git clone https://github.com/AlIfran64/Courier-and-Parcel-Management-System-Server.git
 cd your-repo-folder
 ```
 
