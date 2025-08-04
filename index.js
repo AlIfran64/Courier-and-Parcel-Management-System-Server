@@ -31,7 +31,10 @@ app.use(cors());
 app.use(express.json());
 
 // Firebase Admin SDK
-const serviceAccount = require("./goquick-firebase-adminsdk.json");
+const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf8"
+);
+const serviceAccount = JSON.parse(decodedKey);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -50,8 +53,8 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect to MongoDB
-    await client.connect();
-    console.log("Connected to MongoDB! Server running on port:", port);
+    // await client.connect();
+    // console.log("Connected to MongoDB! Server running on port:", port);
 
     // DB Collections--------------------------
 
@@ -365,55 +368,51 @@ async function run() {
     });
 
     // Patch: Update booking status + assignTo + deliveryAgent etc.
-    app.patch(
-      "/parcels/:id",
-      verifyFirebaseToken,
-      verifyDeliveryAgent,
-      async (req, res) => {
-        const id = req.params.id;
-        const updateData = req.body;
+    app.patch("/parcels/:id", verifyFirebaseToken, async (req, res) => {
+      const id = req.params.id;
+      const updateData = req.body;
 
-        try {
-          const result = await parcelsCollection.updateOne(
-            { _id: new ObjectId(id) },
-            { $set: updateData }
-          );
+      try {
+        const result = await parcelsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
 
-          if (result.modifiedCount > 0) {
-            io.emit("status-updated");
+        if (result.modifiedCount > 0) {
+          io.emit("status-updated");
 
-            //If status is Delivered or Failed, do follow-up actions
-            if (
-              updateData.status === "Delivered" ||
-              updateData.status === "Failed"
-            ) {
-              const parcel = await parcelsCollection.findOne({
-                _id: new ObjectId(id),
-              });
+          //If status is Delivered or Failed, do follow-up actions
+          if (
+            updateData.status === "Delivered" ||
+            updateData.status === "Failed"
+          ) {
+            const parcel = await parcelsCollection.findOne({
+              _id: new ObjectId(id),
+            });
 
-              //1. Update agent availability
-              const agentEmail = parcel?.deliveryAgent?.email;
-              if (agentEmail) {
-                await usersCollection.updateOne(
-                  { email: agentEmail },
-                  { $set: { availability: "available" } }
-                );
-              }
+            //1. Update agent availability
+            const agentEmail = parcel?.deliveryAgent?.email;
+            if (agentEmail) {
+              await usersCollection.updateOne(
+                { email: agentEmail },
+                { $set: { availability: "available" } }
+              );
+            }
 
-              //2. Send status update email
-              const transporter = nodemailer.createTransport({
-                service: "gmail",
-                auth: {
-                  user: process.env.EMAIL_USER,
-                  pass: process.env.EMAIL_PASS,
-                },
-              });
+            //2. Send status update email
+            const transporter = nodemailer.createTransport({
+              service: "gmail",
+              auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS,
+              },
+            });
 
-              const mailOptions = {
-                from: `"GoQuick" <${process.env.EMAIL_USER}>`,
-                to: parcel.email,
-                subject: `Parcel Status Update: ${updateData.status}`,
-                html: `
+            const mailOptions = {
+              from: `"GoQuick" <${process.env.EMAIL_USER}>`,
+              to: parcel.email,
+              subject: `Parcel Status Update: ${updateData.status}`,
+              html: `
             <h3>Hello ${parcel.name},</h3>
             <p>Your parcel status has been updated to <strong>${updateData.status}</strong>.</p>
             <ul>
@@ -423,20 +422,19 @@ async function run() {
             <br />
             <p>Thank you for using GoQuick!</p>
           `,
-              };
+            };
 
-              await transporter.sendMail(mailOptions);
-              console.log("Status email sent to", parcel.email);
-            }
+            await transporter.sendMail(mailOptions);
+            console.log("Status email sent to", parcel.email);
           }
-
-          res.send(result);
-        } catch (err) {
-          console.error("Error in PATCH /parcels/:id:", err);
-          res.status(500).send({ message: "Internal server error" });
         }
+
+        res.send(result);
+      } catch (err) {
+        console.error("Error in PATCH /parcels/:id:", err);
+        res.status(500).send({ message: "Internal server error" });
       }
-    );
+    });
 
     // Get: Assigned parcels to a delivery agent
     app.get(
